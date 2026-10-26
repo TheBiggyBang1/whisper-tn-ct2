@@ -8,10 +8,72 @@ Speech recognition for **Tunisian Arabic (Derja)**, including the French and Eng
 
 | | |
 |---|---|
-| 🤗 Transformers model | [TheBiggyBang/whisper-small-tunisian-derja](https://huggingface.co/TheBiggyBang/whisper-small-tunisian-derja) |
-| 🤗 faster-whisper / CTranslate2 model | [TheBiggyBang/whisper-small-tunisian-derja-ct2](https://huggingface.co/TheBiggyBang/whisper-small-tunisian-derja-ct2) |
+| 🤗 Large model: full precision, Transformers (967 MB) | [TheBiggyBang/whisper-small-tunisian-derja](https://huggingface.co/TheBiggyBang/whisper-small-tunisian-derja) |
+| ⚡ Fast model: int8, built for real-time conversation (250 MB) | [TheBiggyBang/whisper-small-tunisian-derja-ct2](https://huggingface.co/TheBiggyBang/whisper-small-tunisian-derja-ct2) |
 | Training + evaluation notebook | [`asr-i-hope-final.ipynb`](asr-i-hope-final.ipynb) (outputs included) |
 | Detailed notes (data, citations, every metric) | [`note.md`](note.md) |
+
+## Two models: which one to use
+
+There are **two versions of the same fine-tuned model**. They have the same Whisper-small architecture and the same training. The difference is the format, which decides what each one is good at.
+
+| | 🤗 Large model | ⚡ Fast model |
+|---|---|---|
+| Repo | [`whisper-small-tunisian-derja`](https://huggingface.co/TheBiggyBang/whisper-small-tunisian-derja) | [`whisper-small-tunisian-derja-ct2`](https://huggingface.co/TheBiggyBang/whisper-small-tunisian-derja-ct2) |
+| Format | Transformers, full-precision fp32 weights | CTranslate2 (faster-whisper), int8-quantized |
+| Size | 967 MB | 250 MB (about 4× smaller) |
+| Runs on | GPU (or slower on CPU) with PyTorch | GPU (`int8_float16`) or CPU (`int8`), no PyTorch needed |
+| Test WER / CER | 32.8 / 13.4 (greedy) | 30.4 / 12.0 (beam 3) |
+| Made for | Further fine-tuning, research, batch transcription, the 🤗 `pipeline` ecosystem | **Real-time voice conversations between a human and an LLM**, live captions, CPU/edge deployment |
+
+- **Accuracy:** with the same greedy decoding, the two versions score within each other's 95 % confidence intervals.
+- **Rule of thumb:** to train further or work in Transformers, use the **large** one. To talk to something in real time, use the **fast** one.
+
+### The fast model in a human ↔ LLM voice conversation
+
+The fast model ships with [`live_asr.py`](live_asr.py), a streaming engine built for conversational turn-taking:
+
+```
+🎙️ microphone ──► live_asr.py ──────────────────────────────► LLM ──► reply (text or TTS)
+                  VAD detects when the person stops talking
+                  partial text while they speak
+                  final transcript when the turn ends
+```
+
+- **End of turn:** Silero VAD decides the person has finished after 500 ms of silence. The turn is then finalized with beam search, and that final text is what you send to the LLM.
+- **Partial transcripts** appear while the person is still speaking, about 1–1.4 s after they start on a T4 GPU. Use them for live captions or to start preparing the LLM call early.
+- **Speech-to-text delay on GPU:** the final transcript is ready about **0.4–0.8 s** (median) after the person stops talking. That is the speech-to-text share of the assistant's response time.
+- **On a 4-core CPU,** use final-only mode (`--no-partials`). The final transcript then arrives about 3–4 s after the turn ends.
+- **No false triggers:** 10 s of pure background noise produced no text in the benchmark, so silence does not trigger the LLM.
+
+Minimal integration sketch: send each finished turn to your LLM.
+
+```python
+import queue
+import sounddevice as sd
+from faster_whisper import WhisperModel
+from live_asr import TurnTranscriber, StreamConfig
+
+model = WhisperModel("TheBiggyBang/whisper-small-tunisian-derja-ct2",
+                     device="cuda", compute_type="int8_float16")   # CPU: device="cpu", compute_type="int8"
+asr = TurnTranscriber(model, StreamConfig(min_silence_ms=500, final_beam=3))
+audio = queue.Queue()
+
+def ask_llm(user_text: str) -> str:
+    ...  # call your LLM here and return its reply (then speak it with a TTS)
+
+with sd.InputStream(samplerate=16000, channels=1, dtype="float32", blocksize=1600,
+                    callback=lambda indata, *_: audio.put(indata[:, 0].copy())):
+    while True:
+        for event in asr.feed(audio.get()):
+            if event.kind == "partial":
+                print("…", event.stable, event.unstable, end="\r")   # live caption
+            elif event.kind == "final" and event.text:
+                print("\nUser:", event.text)
+                print("Assistant:", ask_llm(event.text))
+```
+
+While the assistant is speaking through a TTS, pause feeding audio (or mute the mic). Otherwise the engine transcribes the assistant's own voice as a new user turn.
 
 ## Results
 
