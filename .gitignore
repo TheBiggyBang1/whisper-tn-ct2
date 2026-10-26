@@ -1,0 +1,39 @@
+# Model weights live on the Hugging Face Hub, not in git
+# (GitHub rejects files over 100 MB; model.safetensors is 967 MB)
+hf-model/
+ct2-model/
+whisper-tn-v3-hf/
+whisper-tn-v3-ct2/
+*.zip
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# Kaggle / training leftovers
+work/
+tn_cache/
+tn_stats/
+checkpoint-*/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+.virtual_documents/
+
+# Audio test files
+*.wav
+*.flac
+*.mp3
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
